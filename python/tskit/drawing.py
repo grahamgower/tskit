@@ -215,6 +215,7 @@ def draw_tree(
             node_labels=node_labels, tree_height_scale=tree_height_scale, order=order,
         )
         tikz.add_tree(tree)
+        return tikz.tostring()
 
     else:
         if width is not None:
