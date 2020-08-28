@@ -1585,26 +1585,26 @@ class Tree:
         node_labels=None,
         tree_height_scale=None,
         order=None,
-        aspect=None,
         scale=None,
         style=None,
         standalone=False,
-        to_terminal=False
+        to_terminal=False,
     ):
         """
         TODO: docstrings.
         """
-        output = drawing.draw_tikz(
-            self,
+        tikz = drawing.TikzTreeSequence(
             node_labels=node_labels,
             tree_height_scale=tree_height_scale,
             order=order,
-            aspect=aspect,
             scale=scale,
             style=style,
             standalone=standalone,
-            to_terminal=to_terminal
         )
+        tikz.add_tree(self)
+        output = tikz.tostring()
+        if to_terminal:
+            print(output)
         if path is not None:
             with open(path, "w") as f:
                 f.write(output)
@@ -4794,6 +4794,18 @@ class TreeSequence:
     def draw_text(self, **kwargs):
         # TODO document this method.
         return str(drawing.TextTreeSequence(self, **kwargs))
+
+    def draw_tikz(self, path=None, to_terminal=False, **kwargs):
+        tikz = drawing.TikzTreeSequence(**kwargs)
+        for tree in self.trees():
+            tikz.add_tree(tree)
+        output = tikz.tostring()
+        if to_terminal:
+            print(output)
+        if path is not None:
+            with open(path, "w") as f:
+                f.write(output)
+        return output
 
     ############################################
     #

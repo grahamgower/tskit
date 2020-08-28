@@ -211,12 +211,10 @@ def draw_tree(
         if max_tree_height is not None:
             raise ValueError("Tikz trees do not support max_tree_height")
 
-        return draw_tikz(
-            tree,
-            node_labels=node_labels,
-            tree_height_scale=tree_height_scale,
-            order=order,
+        tikz = TikzTreeSequence(
+            node_labels=node_labels, tree_height_scale=tree_height_scale, order=order,
         )
+        tikz.add_tree(tree)
 
     else:
         if width is not None:
@@ -245,39 +243,11 @@ def draw_tree(
         )
         return str(text_tree)
 
-def draw_tikz(
-    tree,
-    node_labels=None,
-    tree_height_scale=None,
-    order=None,
-    aspect=None,
-    scale=None,
-    style=None,
-    standalone=False,
-    to_terminal=False
-):
-    """
-    Return a string containing latex/tikz commands to draw a tskit.Tree.
 
-    Save the string to a file (e.g. tree.tex) and include it in your latex
-    document with ``\input{tree.tex}``.
-    """
-    if node_labels is None:
-        node_labels = {node: str(node) for node in tree.nodes()}
-    if tree_height_scale is None:
-        tree_height_scale = "rank"
-    if aspect is None:
-        aspect = 1
-    if style is None:
-        # We use a tex comment to avoid an empty line in the tikz options field
-        # (as that would be a syntax error).
-        style = "%"
-    order = check_order(order)
-
-    template = textwrap.dedent(
+class TikzTreeSequence:
+    header_template = textwrap.dedent(
         r"""
-        \begin{tikzpicture}[
-            scale=$scale,
+        \tikzset{
             edge/.style = {
                 draw=black,
             },
@@ -298,120 +268,177 @@ def draw_tikz(
                 fill=red,
             },
             mutationlabels/.style = {
-                    font=\scriptsize,
-                    anchor=east,
-                    color=red,
-            }
+                font=\scriptsize,
+                anchor=east,
+                color=red,
+            },
             % User customisation goes here.
             $user_style_text
-        ]
-            % Nodes.
-            \foreach \name/\x/\y/\text in {
-                $node_coords%
-            } {
-                \ifx\empty\text{
-                    \node[empty node] (\name) at (\x, \y) {};
-                }\else{
-                    \node[node] (\name) at (\x, \y) {\text};
-                }\fi
-            }
-
-            % Edges.
-            \foreach \child/\parent in {
-                $edges%
-            }
-                \path[edge] (\child) |- (\parent);
-
-            % Mutations.
-            \foreach \name/\x/\y\text in {
-                $mutation_coords%
-            } {
-                \node[mutations] (\name) at (\x, \y) {};
-                \node[mutationlabels] at  (\x, \y) {\text};
-            }
-        \end{tikzpicture}"""
+        }"""
     )
 
-    root_time = tree.time(tree.root)
-    num_leaves = sum(1 for _ in tree.leaves())
-    leaf_x_inc = aspect / num_leaves
-    leaf_x = 0
-    edges = []
-    x_coords = dict()
-    y_coords = dict()
-
-    for node in tree.nodes(order=order):
-        if tree.is_leaf(node):
-            x = leaf_x
-            leaf_x += leaf_x_inc
-        else:
-            edges.extend([f"n{u}/n{node}" for u in tree.children(node)])
-            children_x = [x_coords[u] for u in tree.children(node)]
-            x = (children_x[0] + children_x[-1]) / 2
-        x_coords[node] = x
-        y_coords[node] = tree.time(node) / root_time
-
-    if tree_height_scale == "rank":
-        nodes = sorted(y_coords.keys(), key=y_coords.__getitem__)
-        y_coords = {
-            node: (i - num_leaves) / num_leaves if i > num_leaves else 0
-            for i, node in enumerate(nodes, 1)
+    tree_template = textwrap.dedent(
+        r"""
+        % Nodes.
+        \foreach \name/\x/\y/\text in {%
+            $node_coords%
+        } {
+            \ifx\empty\text{
+                \node[empty node] (\name) at (\x, \y) {};
+            }\else{
+                \node[node] (\name) at (\x, \y) {\text};
+            }\fi
         }
-    elif tree_height_scale == "log_time":
-        y_coords = {node: math.log(1 + y) for node, y in y_coords.items()}
-    elif tree_height_scale != "time":
-        raise ValueError(f"unknown tree_height_scale={tree_height_scale}")
 
-    node_coords = []
-    for node in tree.nodes():
-        x = rnd(x_coords[node])
-        y = rnd(y_coords[node])
-        text = node_labels.get(node, "")
-        node_coords.append(f"n{node}/{x}/{y}/{text}")
+        % Edges.
+        \foreach \child/\parent in {%
+            $edges%
+        } {
+            \path[edge] (\child) |- (\parent);
+        }
 
-    # Calculate the edge lengths.
-    edge_lengths = dict()
-    for node in tree.nodes():
-        p = tree.parent(node)
-        if p != -1:
-            edge_lengths[node] = y_coords[p] - y_coords[node]
-
-    # Calculate the mutation coordinates.
-    mutations_on_edges = [[] for _ in range(0, max(tree.roots))]
-    mutation_coords = []
-    for mut in tree.mutations():
-        mutations_on_edges[mut.node].append(mut.id)
-    for child, muts in enumerate(mutations_on_edges):
-        num_muts = len(muts)
-        for ind, mut in enumerate(muts):
-            x = rnd(x_coords[child])
-            y = rnd(y_coords[child] + ((ind + 1)/(num_muts + 1) * edge_lengths[child]))
-            mutation_coords.append(f"m{mut}/{x}/{y}/{mut}")
-
-    if scale is None:
-        # XXX: this is a bad heuristic when using node labels on internal nodes
-        scale = 4 * math.log(num_leaves)
-
-    wrapper = textwrap.TextWrapper(subsequent_indent=" " * 8)
-
-    output = string.Template(template).substitute(
-        scale=scale,
-        node_coords=wrapper.fill(", ".join(node_coords)),
-        edges=wrapper.fill(", ".join(edges)),
-        mutation_coords=wrapper.fill(", ".join(mutation_coords)),
-        user_style_text=style,
+        % Mutations.
+        \foreach \name/\x/\y\text in {%
+            $mutation_coords%
+        } {
+            \node[mutations] (\name) at (\x, \y) {};
+            \node[mutationlabels] at  (\x, \y) {\text};
+        }"""
     )
 
-    if standalone:
-        output = (
-            "\\documentclass[tikz,border=1mm]{standalone}\n"
-            "\\begin{document}\n" + output + "\n\\end{document}\n"
+    def __init__(
+        self,
+        node_labels=None,
+        tree_height_scale=None,
+        order=None,
+        style=None,
+        standalone=False,
+        scale=None,
+    ):
+        if tree_height_scale is None:
+            tree_height_scale = "rank"
+        if style is None:
+            # We use a tex comment to avoid an empty line in the tikz options field
+            # (as that would be a syntax error).
+            style = "%"
+        self.node_labels = node_labels
+        self.tree_height_scale = tree_height_scale
+        self.style = style
+        self.order = check_order(order)
+        self.standalone = standalone
+        self.scale = scale
+        self.pics = []
+        self.num_leaves = None
+
+    def add_tree(self, tree):
+        node_labels = self.node_labels
+        if node_labels is None:
+            node_labels = {node: str(node) for node in tree.nodes()}
+
+        root_time = tree.time(tree.root)
+        if self.num_leaves is None:
+            self.num_leaves = sum(1 for _ in tree.leaves())
+        leaf_x_inc = 1 / self.num_leaves
+        leaf_x = 0
+        edges = []
+        x_coords = dict()
+        y_coords = dict()
+
+        for node in tree.nodes(order=self.order):
+            if tree.is_leaf(node):
+                x = leaf_x
+                leaf_x += leaf_x_inc
+            else:
+                edges.extend([f"n{u}/n{node}" for u in tree.children(node)])
+                children_x = [x_coords[u] for u in tree.children(node)]
+                x = (children_x[0] + children_x[-1]) / 2
+            x_coords[node] = x
+            y_coords[node] = tree.time(node) / root_time
+
+        if self.tree_height_scale == "rank":
+            nodes = sorted(y_coords.keys(), key=y_coords.__getitem__)
+            y_coords = {
+                node: (i - self.num_leaves) / self.num_leaves
+                if i > self.num_leaves
+                else 0
+                for i, node in enumerate(nodes, 1)
+            }
+        elif self.tree_height_scale == "log_time":
+            y_coords = {node: math.log(1 + y) for node, y in y_coords.items()}
+        elif self.tree_height_scale != "time":
+            raise ValueError(f"unknown tree_height_scale={self.tree_height_scale}")
+
+        node_coords = []
+        for node in tree.nodes():
+            x = rnd(x_coords[node])
+            y = rnd(y_coords[node])
+            text = node_labels.get(node, "")
+            node_coords.append(f"n{node}/{x}/{y}/{text}")
+
+        # Calculate the edge lengths.
+        edge_lengths = dict()
+        for node in tree.nodes():
+            p = tree.parent(node)
+            if p != -1:
+                edge_lengths[node] = y_coords[p] - y_coords[node]
+
+        # Calculate the mutation coordinates.
+        mutations_on_edges = [[] for _ in range(0, max(tree.roots))]
+        mutation_coords = []
+        for mut in tree.mutations():
+            mutations_on_edges[mut.node].append(mut.id)
+        for child, muts in enumerate(mutations_on_edges):
+            num_muts = len(muts)
+            for ind, mut in enumerate(muts):
+                x = rnd(x_coords[child])
+                y = rnd(
+                    y_coords[child] + ((ind + 1) / (num_muts + 1) * edge_lengths[child])
+                )
+                mutation_coords.append(f"m{mut}/{x}/{y}/{mut}")
+
+        wrapper = textwrap.TextWrapper(
+            initial_indent=" " * 4, subsequent_indent=" " * 8, width=80
         )
 
-    if to_terminal:
-        print(output)
+        pic = string.Template(self.tree_template).substitute(
+            node_coords=wrapper.fill(", ".join(node_coords)),
+            edges=wrapper.fill(", ".join(edges)),
+            mutation_coords=wrapper.fill(", ".join(mutation_coords)),
+        )
+        self.pics.append(pic)
 
-    return output
+    def tostring(self):
+        if len(self.pics) == 0:
+            raise ValueError("No trees. Did you forget to add_tree()?")
+
+        output = [
+            string.Template(self.header_template).substitute(
+                user_style_text=self.style,
+            )
+        ]
+
+        if self.scale is None:
+            # XXX: this is a bad heuristic when using node labels on internal nodes
+            self.scale = rnd(4 * math.log(self.num_leaves))
+
+        output += [f"\\begin{{tikzpicture}}[scale={self.scale}]"]
+        for j, pic in enumerate(self.pics):
+            xshift = rnd(j * 1.1)
+            output += [
+                f"\\begin{{scope}}[shift={{({xshift},0)}}]",
+                pic,
+                "\\end{scope}",
+            ]
+        output += ["\\end{tikzpicture}"]
+
+        if self.standalone:
+            output = (
+                ["\\documentclass[tikz,border=1mm]{standalone}", "\\begin{document}"]
+                + output
+                + ["\\end{document}"]
+            )
+
+        return "\n".join(output)
 
 
 class SvgTreeSequence:
