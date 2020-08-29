@@ -249,6 +249,36 @@ class TikzTreeSequence:
     header_template = textwrap.dedent(
         r"""
         \tikzset{
+            Tree/.pic = {
+                \tikzset{/tskit/Tree/.cd, #1}
+
+                % Nodes.
+                \foreach \name/\x/\y/\text in \NodeCoords {
+                    \ifx\empty\text{
+                        \node[empty node] (\name) at (\x, \y) {};
+                    }\else{
+                        \node[node] (\name) at (\x, \y) {\text};
+                    }\fi
+                }
+
+                % Edges.
+                \foreach \child/\parent in \Edges {
+                    \path[edge] (\child) |- (\parent);
+                }
+
+                % Mutations.
+                \foreach \name/\x/\y\text in \MutationCoords {
+                    \node[mutations] (\name) at (\x, \y) {};
+                    \node[mutationlabels] at  (\x, \y) {\text};
+                }
+            },
+            %
+            /tskit/Tree/.cd,
+            node coords/.store in = \NodeCoords,
+            edges/.store in = \Edges,
+            mutation coords/.store in = \MutationCoords,
+            %
+            /tikz/.cd,
             edge/.style = {
                 draw=black,
             },
@@ -273,6 +303,9 @@ class TikzTreeSequence:
                 anchor=east,
                 color=red,
             },
+            every pic/.style = {
+                scale=$scale,
+            },
             % User customisation goes here.
             $user_style_text
         }"""
@@ -280,31 +313,17 @@ class TikzTreeSequence:
 
     tree_template = textwrap.dedent(
         r"""
-        % Nodes.
-        \foreach \name/\x/\y/\text in {%
-            $node_coords%
-        } {
-            \ifx\empty\text{
-                \node[empty node] (\name) at (\x, \y) {};
-            }\else{
-                \node[node] (\name) at (\x, \y) {\text};
-            }\fi
-        }
-
-        % Edges.
-        \foreach \child/\parent in {%
-            $edges%
-        } {
-            \path[edge] (\child) |- (\parent);
-        }
-
-        % Mutations.
-        \foreach \name/\x/\y\text in {%
-            $mutation_coords%
-        } {
-            \node[mutations] (\name) at (\x, \y) {};
-            \node[mutationlabels] at  (\x, \y) {\text};
-        }"""
+        \pic [$options] {Tree={
+            node coords = {%
+                $node_coords%
+            },
+            edges = {%
+                $edges%
+            },
+            mutation coords = {%
+                $mutation_coords%
+            }
+        }};"""
     )
 
     def __init__(
@@ -313,6 +332,7 @@ class TikzTreeSequence:
         tree_height_scale=None,
         order=None,
         style=None,
+        preamble=None,
         standalone=False,
         scale=None,
     ):
@@ -322,9 +342,13 @@ class TikzTreeSequence:
             # We use a tex comment to avoid an empty line in the tikz options field
             # (as that would be a syntax error).
             style = "%"
+        if preamble is None:
+            preamble = ""
+
         self.node_labels = node_labels
         self.tree_height_scale = tree_height_scale
         self.style = style
+        self.preamble = preamble
         self.order = check_order(order)
         self.standalone = standalone
         self.scale = scale
@@ -397,11 +421,15 @@ class TikzTreeSequence:
                 )
                 mutation_coords.append(f"m{mut}/{x}/{y}/{mut}")
 
-        wrapper = textwrap.TextWrapper(
-            initial_indent=" " * 4, subsequent_indent=" " * 8, width=80
-        )
+        wrapper = textwrap.TextWrapper(subsequent_indent=" " * 8, width=80)
 
+        if self.scale is None:
+            # XXX: this is a bad heuristic when using node labels on internal nodes
+            self.scale = rnd(4 * math.log(self.num_leaves))
+
+        xshift = rnd(1.1 * len(self.pics) * self.scale)
         pic = string.Template(self.tree_template).substitute(
+            options=f"shift={{({xshift},0)}}",
             node_coords=wrapper.fill(", ".join(node_coords)),
             edges=wrapper.fill(", ".join(edges)),
             mutation_coords=wrapper.fill(", ".join(mutation_coords)),
@@ -412,24 +440,19 @@ class TikzTreeSequence:
         if len(self.pics) == 0:
             raise ValueError("No trees. Did you forget to add_tree()?")
 
-        output = [
+        output = []
+
+        if self.preamble is not None:
+            output += [self.preamble]
+
+        output += [
             string.Template(self.header_template).substitute(
-                user_style_text=self.style,
+                user_style_text=self.style, scale=self.scale,
             )
         ]
 
-        if self.scale is None:
-            # XXX: this is a bad heuristic when using node labels on internal nodes
-            self.scale = rnd(4 * math.log(self.num_leaves))
-
-        output += [f"\\begin{{tikzpicture}}[scale={self.scale}]"]
-        for j, pic in enumerate(self.pics):
-            xshift = rnd(j * 1.1)
-            output += [
-                f"\\begin{{scope}}[shift={{({xshift},0)}}]",
-                pic,
-                "\\end{scope}",
-            ]
+        output += ["\\begin{tikzpicture}"]
+        output += self.pics
         output += ["\\end{tikzpicture}"]
 
         if self.standalone:

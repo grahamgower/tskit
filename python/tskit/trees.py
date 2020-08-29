@@ -1587,6 +1587,7 @@ class Tree:
         order=None,
         scale=None,
         style=None,
+        preamble=None,
         standalone=False,
         to_terminal=False,
     ):
@@ -1599,6 +1600,7 @@ class Tree:
             order=order,
             scale=scale,
             style=style,
+            preamble=preamble,
             standalone=standalone,
         )
         tikz.add_tree(self)
